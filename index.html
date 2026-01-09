@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Social Tank</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #0a0a0a; 
+            font-family: 'Orbitron', 'Segoe UI', sans-serif; 
+            touch-action: none; 
+        }
+        #gameCanvas { 
+            display: block; 
+            background: radial-gradient(circle at center, #16213e 0%, #0f0f1a 100%); 
+        }
+        .ui-layer { 
+            pointer-events: none; 
+            position: absolute; 
+            inset: 0; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: space-between; 
+            padding: 12px; 
+            color: #e0e0e0; 
+            text-shadow: 0 0 8px rgba(0,0,0,0.9); 
+        }
+        .interactive { pointer-events: auto; }
+        .health-bar-container { 
+            width: 160px; 
+            height: 10px; 
+            background: rgba(0,0,0,0.7); 
+            border: 1px solid #444; 
+            border-radius: 5px; 
+            overflow: hidden; 
+        }
+        .health-bar-fill { 
+            height: 100%; 
+            background: linear-gradient(90deg, #dc2626, #f97316); 
+            transition: width 0.3s ease; 
+        }
+        #minimap { 
+            width: 140px; 
+            height: 140px; 
+            background: rgba(0,0,0,0.85); 
+            border: 2px solid #444; 
+            border-radius: 8px; 
+        }
+        .victory-overlay { 
+            position: absolute; 
+            inset: 0; 
+            background: rgba(0,0,0,0.95); 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            z-index: 200; 
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap');
+        h1 { font-family: 'Orbitron', sans-serif; }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Main Menu -->
+    <div id="menuOverlay" class="fixed inset-0 bg-black/95 flex items-center justify-center z-50">
+        <div class="bg-gradient-to-b from-zinc-900 to-zinc-950 p-8 rounded-2xl border border-zinc-700 shadow-2xl w-full max-w-md text-center">
+            <h1 class="text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-red-600 to-blue-600 mb-3">Social Tank</h1>
+            <p class="text-zinc-500 text-sm uppercase tracking-wider mb-8">Social multiplayer Tank Combat</p>
+            
+            <input type="text" id="playerName" placeholder="Name..." maxlength="12"
+                class="w-full bg-zinc-800 border border-zinc-600 text-white text-center px-4 py-3 rounded-lg text-base focus:outline-none focus:border-cyan-500 mb-6">
+
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="startGame('tdm')" class="bg-gradient-to-r from-blue-700 to-cyan-700 hover:from-blue-600 hover:to-cyan-600 text-white font-medium py-4 rounded-xl text-lg transition-all transform hover:scale-105 shadow interactive flex flex-col items-center">
+                    <i class="fas fa-skull-crossbones"></i>
+                    TEAM DEATHMATCH
+                </button>
+                <button onclick="startGame('br')" class="bg-gradient-to-r from-red-700 to-orange-700 hover:from-red-600 hover:to-orange-600 text-white font-medium py-4 rounded-xl text-lg transition-all transform hover:scale-105 shadow interactive flex flex-col items-center">
+                    <i class="fas fa-crown"></i>
+                    BATTLE ROYALE
+                </button>
+            </div>
+
+            <div id="connectionStatus" class="text-zinc-600 mt-6 text-xs flex items-center justify-center gap-2">
+                <i class="fas fa-circle-notch fa-spin" id="connIcon"></i> Connecting to server...
+            </div>
+        </div>
+    </div>
+
+    <!-- In-Game UI -->
+    <div id="gameUI" class="ui-layer hidden text-xs">
+        <div class="flex justify-between items-start">
+            <!-- Player Info -->
+            <div class="bg-black/60 backdrop-blur-sm p-3 rounded-lg border border-white/10">
+                <div class="text-xs uppercase tracking-wider text-zinc-500 flex items-center gap-2 mb-1">
+                    <i class="fas fa-shield-alt"></i> HULL INTEGRITY
+                </div>
+                <div class="health-bar-container mb-2">
+                    <div id="healthFill" class="health-bar-fill" style="width: 100%"></div>
+                </div>
+                <div class="text-sm font-medium flex items-center gap-4">
+                    <span id="teamName" class="text-base font-bold">NONE</span>
+                    <span class="flex items-center gap-1"><i class="fas fa-crosshair text-zinc-400"></i> KILLS: <span id="killCount">0</span></span>
+                </div>
+            </div>
+
+            <!-- TDM Scoreboard -->
+            <div id="tdmScoreboard" class="hidden bg-black/70 backdrop-blur-sm p-4 rounded-lg border border-white/15 text-center">
+                <div class="text-xs uppercase tracking-widest text-zinc-500 mb-2 flex items-center justify-center gap-2">
+                    <i class="fas fa-trophy"></i> MATCH PROGRESS
+                </div>
+                <div class="flex items-center justify-center gap-8 text-2xl font-bold">
+                    <div>
+                        <div class="text-red-500 text-xs flex items-center gap-1"><i class="fas fa-flag"></i> RED</div>
+                        <div id="redWins" class="text-3xl text-red-400">0</div>
+                    </div>
+                    <div class="text-2xl text-zinc-400">—</div>
+                    <div>
+                        <div class="text-blue-500 text-xs flex items-center gap-1"><i class="fas fa-flag"></i> BLUE</div>
+                        <div id="blueWins" class="text-3xl text-blue-400">0</div>
+                    </div>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-6 text-xs">
+                    <div>
+                        <div class="text-zinc-500 flex items-center justify-center gap-1"><i class="fas fa-heart"></i> LIVES</div>
+                        <div id="redLives" class="text-lg mt-1"></div>
+                    </div>
+                    <div>
+                        <div class="text-zinc-500 flex items-center justify-center gap-1"><i class="fas fa-heart"></i> LIVES</div>
+                        <div id="blueLives" class="text-lg mt-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white/10 px-4 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+                <i id="modeIcon" class="fas fa-skull-crossbones"></i>
+                <span id="modeLabel">TDM</span>
+            </div>
+        </div>
+
+        <div class="flex justify-between items-end">
+            <div id="killLog" class="bg-black/50 backdrop-blur p-3 rounded-lg max-w-sm max-h-32 overflow-y-auto space-y-1 text-xs"></div>
+            <canvas id="minimap"></canvas>
+        </div>
+    </div>
+
+    <!-- Victory Screen -->
+    <div id="victoryOverlay" class="victory-overlay hidden">
+        <div class="text-center">
+            <h1 class="text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-500 to-orange-600 mb-6">VICTORY</h1>
+            <div id="winnerText" class="text-4xl font-bold mb-4 flex items-center justify-center gap-3">
+                <i class="fas fa-trophy text-5xl"></i>
+                <span></span>
+            </div>
+            <div class="text-xl mb-10 text-zinc-400 flex items-center justify-center gap-2">
+                <i class="fas fa-scoreboard"></i> Final Score: <span id="finalScore">0 - 0</span>
+            </div>
+            <button onclick="location.reload()" class="bg-gradient-to-r from-green-700 to-emerald-700 hover:from-green-600 hover:to-emerald-600 text-white font-bold py-4 px-10 rounded-xl text-lg transition-all transform hover:scale-110 shadow-xl flex items-center gap-3 mx-auto">
+                <i class="fas fa-redo"></i> NEW MATCH
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Audio Setup
+        const sounds = {
+            shoot: new Audio('https://cdn.pixabay.com/download/audio/2022/03/24/audio_4e1d8a3b7e.mp3?filename=tank-shot-46791.mp3'),
+            explosion: new Audio('https://cdn.pixabay.com/download/audio/2022/05/13/audio_2e5f9f3c3d.mp3?filename=explosion-6055.mp3'),
+            engine: new Audio('https://cdn.pixabay.com/download/audio/2023/08/14/audio_2d3e8f3a0e.mp3?filename=tank-engine-171503.mp3')
+        };
+
+        // Preload and configure
+        Object.values(sounds).forEach(audio => {
+            audio.preload = 'auto';
+            audio.volume = 0.4;
+        });
+        sounds.engine.loop = true;
+
+        let isMoving = false;
+
+        // Canvas Setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const minimapCanvas = document.getElementById('minimap');
+        const mctx = minimapCanvas.getContext('2d');
+
+        // Server Connection
+        const SERVER_URL = window.location.hostname.includes('localhost') || window.location.hostname === '127.0.0.1'
+            ? 'http://localhost:3000'
+            : 'http://localhost:3000';
+
+        const socket = io(SERVER_URL);
+
+        // Game State
+        let socketId = null;
+        let localPlayer = null;
+        let players = {};
+        let serverBullets = [];
+        let particles = [];
+        let currentMode = null;
+        let roundWins = { red: 0, blue: 0 };
+        let lives = { red: 4, blue: 4 };
+        let keys = {};
+        let mouse = { x: 0, y: 0, down: false };
+        let lastShot = 0;
+        let WORLD_SIZE = 2500;
+        const SHOOT_COOLDOWN = 600;
+
+        // Socket Events (unchanged)
+        socket.on('connect', () => {
+            document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-circle text-green-400"></i> <span class="text-green-400">CONNECTED</span>';
+        });
+
+        socket.on('connect_error', () => {
+            document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-circle text-red-400"></i> <span class="text-red-400">FAILED</span>';
+        });
+
+        socket.on('init', (data) => {
+            socketId = data.id;
+            WORLD_SIZE = data.config.worldSize;
+            players = data.players;
+            serverBullets = data.bullets || [];
+            if (data.roundWins) roundWins = data.roundWins;
+            if (data.lives) lives = data.lives;
+            updateScoreboard();
+        });
+
+        socket.on('stateUpdate', (data) => {
+            players = data.players;
+            serverBullets = data.bullets || [];
+            if (data.roundWins) roundWins = data.roundWins;
+            if (data.lives) lives = data.lives;
+            if (players[socketId]) localPlayer = players[socketId];
+            updateScoreboard();
+        });
+
+        socket.on('livesUpdate', (data) => {
+            lives = data.lives;
+            updateLives();
+        });
+
+        socket.on('newRound', (data) => {
+            lives = data.lives;
+            updateLives();
+        });
+
+        socket.on('roundVictory', (data) => {
+            roundWins = data.roundWins;
+            updateScoreboard();
+        });
+
+        socket.on('matchVictory', (data) => {
+            showVictory(data.winner, data.finalScore || roundWins, data.message || 'VICTORY!');
+        });
+
+        socket.on('matchReset', (data) => {
+            roundWins = data.roundWins || { red: 0, blue: 0 };
+            lives = data.lives || { red: 4, blue: 4 };
+            updateScoreboard();
+        });
+
+        socket.on('playerJoined', (p) => { players[p.id] = p; });
+        socket.on('playerDisconnected', (id) => { delete players[id]; });
+
+        socket.on('killEvent', (data) => {
+            logKill(data.attacker, data.victim);
+            if (data.victim === socketId && localPlayer) {
+                sounds.explosion.currentTime = 0;
+                sounds.explosion.play();
+                createExplosion(localPlayer.x, localPlayer.y, '#ff4400', 60);
+            }
+        });
+
+        // UI Functions (unchanged except lives icons)
+        function updateScoreboard() {
+            if (currentMode !== 'tdm') return;
+            document.getElementById('tdmScoreboard').classList.remove('hidden');
+            document.getElementById('redWins').innerText = roundWins.red;
+            document.getElementById('blueWins').innerText = roundWins.blue;
+            updateLives();
+        }
+
+        function updateLives() {
+            document.getElementById('redLives').innerHTML = '<i class="fas fa-heart text-red-500"></i>'.repeat(lives.red) + '<i class="fas fa-heart-broken text-zinc-600"></i>'.repeat(4 - lives.red);
+            document.getElementById('blueLives').innerHTML = '<i class="fas fa-heart text-blue-500"></i>'.repeat(lives.blue) + '<i class="fas fa-heart-broken text-zinc-600"></i>'.repeat(4 - lives.blue);
+        }
+
+        function showVictory(winner, score, message) {
+            document.getElementById('victoryOverlay').classList.remove('hidden');
+            document.getElementById('winnerText').innerHTML = `<span>${winner.toUpperCase()} TEAM WINS!</span>`;
+            document.getElementById('winnerText').className = winner === 'red' ? 'text-4xl font-bold mb-4 flex items-center justify-center gap-3 text-red-500' : 'text-4xl font-bold mb-4 flex items-center justify-center gap-3 text-blue-500';
+            document.getElementById('finalScore').innerText = `${score.red} - ${score.blue}`;
+        }
+
+        function startGame(mode) {
+            if (!socket.connected) return;
+            const name = document.getElementById('playerName').value.trim() || "Vanguard";
+            currentMode = mode;
+
+            document.getElementById('menuOverlay').classList.add('hidden');
+            document.getElementById('gameUI').classList.remove('hidden');
+            document.getElementById('modeLabel').innerText = mode.toUpperCase();
+            document.getElementById('modeIcon').className = mode === 'tdm' ? 'fas fa-skull-crossbones' : 'fas fa-crown';
+
+            if (mode === 'br') {
+                document.getElementById('tdmScoreboard').classList.add('hidden');
+            } else {
+                document.getElementById('tdmScoreboard').classList.remove('hidden');
+            }
+
+            socket.emit('joinGame', { name, mode });
+            requestAnimationFrame(gameLoop);
+        }
+
+        function logKill(attackerId, victimId) {
+            const log = document.getElementById('killLog');
+            const entry = document.createElement('div');
+            const attacker = players[attackerId];
+            const victim = players[victimId];
+            const attackerColor = attacker?.team === 'red' ? 'text-red-400' : 'text-blue-400';
+            const victimColor = victim?.team === 'red' ? 'text-red-400' : 'text-blue-400';
+
+            entry.innerHTML = `<i class="fas fa-crosshair"></i> <span class="${attackerColor} font-bold">${attacker?.name || 'Unknown'}</span> eliminated <span class="${victimColor} font-bold">${victim?.name || 'Unknown'}</span>`;
+            entry.className = 'opacity-0 transition-opacity duration-500';
+            log.prepend(entry);
+            setTimeout(() => entry.style.opacity = '1', 50);
+
+            if (log.children.length > 8) {
+                log.removeChild(log.lastChild);
+            }
+        }
+
+        // Input & Resize (unchanged)
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            minimapCanvas.width = 140;
+            minimapCanvas.height = 140;
+        });
+        window.dispatchEvent(new Event('resize'));
+
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+        window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+        window.addEventListener('mousedown', () => mouse.down = true);
+        window.addEventListener('mouseup', () => mouse.down = false);
+
+        // Game Update
+        function update() {
+            if (!localPlayer || localPlayer.dead) {
+                if (sounds.engine.playing) sounds.engine.pause();
+                return;
+            }
+
+            const speed = 4.8;
+            const turnSpeed = 0.05;
+
+            const wasMoving = isMoving;
+            isMoving = keys['KeyW'] || keys['KeyS'];
+
+            if (isMoving && !wasMoving) {
+                sounds.engine.currentTime = 0;
+                sounds.engine.play();
+            } else if (!isMoving && wasMoving) {
+                sounds.engine.pause();
+            }
+
+            if (keys['KeyW']) {
+                localPlayer.x += Math.cos(localPlayer.angle) * speed;
+                localPlayer.y += Math.sin(localPlayer.angle) * speed;
+            }
+            if (keys['KeyS']) {
+                localPlayer.x -= Math.cos(localPlayer.angle) * speed * 0.6;
+                localPlayer.y -= Math.sin(localPlayer.angle) * speed * 0.6;
+            }
+            if (keys['KeyA']) localPlayer.angle -= turnSpeed;
+            if (keys['KeyD']) localPlayer.angle += turnSpeed;
+
+            localPlayer.x = Math.max(60, Math.min(WORLD_SIZE - 60, localPlayer.x));
+            localPlayer.y = Math.max(60, Math.min(WORLD_SIZE - 60, localPlayer.y));
+
+            localPlayer.turretAngle = Math.atan2(mouse.y - canvas.height / 2, mouse.x - canvas.width / 2);
+
+            socket.emit('updateState', {
+                x: localPlayer.x,
+                y: localPlayer.y,
+                angle: localPlayer.angle,
+                turretAngle: localPlayer.turretAngle
+            });
+
+            if (mouse.down && Date.now() - lastShot > SHOOT_COOLDOWN) {
+                socket.emit('shoot', {
+                    x: localPlayer.x + Math.cos(localPlayer.turretAngle) * 50,
+                    y: localPlayer.y + Math.sin(localPlayer.turretAngle) * 50,
+                    angle: localPlayer.turretAngle
+                });
+                lastShot = Date.now();
+
+                sounds.shoot.currentTime = 0;
+                sounds.shoot.play();
+
+                createExplosion(localPlayer.x + Math.cos(localPlayer.turretAngle) * 45, localPlayer.y + Math.sin(localPlayer.turretAngle) * 45, '#ffff88', 12);
+            }
+
+            // Update UI
+            document.getElementById('healthFill').style.width = Math.max(0, localPlayer.health) + '%';
+            document.getElementById('killCount').innerText = localPlayer.kills || 0;
+
+            const teamEl = document.getElementById('teamName');
+            teamEl.innerText = (localPlayer.team || 'SOLO').toUpperCase();
+            teamEl.className = localPlayer.team === 'red' ? 'text-base font-bold text-red-500' :
+                              localPlayer.team === 'blue' ? 'text-base font-bold text-blue-500' :
+                              'text-base font-bold text-green-400';
+
+            // Update particles
+            particles = particles.filter(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.alpha -= 0.03;
+                return p.alpha > 0;
+            });
+        }
+
+        function createExplosion(x, y, color, count) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const velocity = Math.random() * 8 + 4;
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * velocity,
+                    vy: Math.sin(angle) * velocity,
+                    radius: Math.random() * 5 + 3,
+                    color,
+                    alpha: 1
+                });
+            }
+        }
+
+        // Rendering (unchanged)
+        function drawTank(player) {
+            if (!localPlayer) return;
+            const camX = localPlayer.x - canvas.width / 2;
+            const camY = localPlayer.y - canvas.height / 2;
+            const sx = player.x - camX;
+            const sy = player.y - camY;
+
+            ctx.save();
+            ctx.translate(sx, sy);
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            ctx.fillRect(-25, -30, 50, 60);
+
+            // Hull rotation
+            ctx.save();
+            ctx.rotate(player.angle + Math.PI / 2);
+
+            const hullColor = player.team === 'red' ? '#b91c1c' :
+                             player.team === 'blue' ? '#1e40af' : '#166534';
+            ctx.fillStyle = player.dead ? '#333' : hullColor;
+
+            // Treads
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-28, -35, 12, 70);
+            ctx.fillRect(16, -35, 12, 70);
+
+            // Main body
+            ctx.fillStyle = player.dead ? '#444' : hullColor;
+            ctx.fillRect(-22, -32, 44, 64);
+            ctx.restore();
+
+            // Turret
+            ctx.save();
+            ctx.rotate(player.turretAngle);
+            ctx.fillStyle = '#222';
+            ctx.fillRect(-8, -8, 60, 16);
+
+            const turretColor = player.team === 'red' ? '#ef4444' :
+                               player.team === 'blue' ? '#3b82f6' : '#22c55e';
+            ctx.fillStyle = player.dead ? '#555' : turretColor;
+            ctx.beginPath();
+            ctx.arc(0, 0, 22, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            ctx.restore();
+
+            // Name
+            ctx.fillStyle = player.dead ? '#888' : '#fff';
+            ctx.font = 'bold 12px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(player.name + (player.dead ? ' [WRECKED]' : ''), sx, sy - 60);
+
+            // Health bar
+            if (!player.dead && player.health > 0) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(sx - 25, sy - 50, 50, 6);
+                ctx.fillStyle = player.health > 50 ? '#22c55e' : player.health > 25 ? '#facc15' : '#ef4444';
+                ctx.fillRect(sx - 23, sy - 48, (player.health / 100) * 46, 2);
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (!localPlayer) return;
+
+            const camX = localPlayer.x - canvas.width / 2;
+            const camY = localPlayer.y - canvas.height / 2;
+
+            // Grid
+            ctx.strokeStyle = '#1f2937';
+            ctx.lineWidth = 1;
+            const gridSize = 100;
+            const startX = Math.floor(camX / gridSize) * gridSize;
+            const startY = Math.floor(camY / gridSize) * gridSize;
+
+            for (let x = startX; x < camX + canvas.width + gridSize; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x - camX, 0);
+                ctx.lineTo(x - camX, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = startY; y < camY + canvas.height + gridSize; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y - camY);
+                ctx.lineTo(canvas.width, y - camY);
+                ctx.stroke();
+            }
+
+            // World border
+            ctx.strokeStyle = '#dc2626';
+            ctx.lineWidth = 6;
+            ctx.strokeRect(-camX, -camY, WORLD_SIZE, WORLD_SIZE);
+
+            // Particles
+            particles.forEach(p => {
+                ctx.globalAlpha = p.alpha;
+                ctx.fillStyle = p.color;
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x - camX, p.y - camY, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
+
+            // Bullets
+            serverBullets.forEach(b => {
+                ctx.fillStyle = '#fbbf24';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#fbbf24';
+                ctx.beginPath();
+                ctx.arc(b.x - camX, b.y - camY, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = '#fcd34d';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(b.x - camX, b.y - camY);
+                ctx.lineTo(b.x - Math.cos(b.angle) * 25 - camX, b.y - Math.sin(b.angle) * 25 - camY);
+                ctx.stroke();
+            });
+            ctx.shadowBlur = 0;
+
+            // Tanks
+            Object.values(players).forEach(drawTank);
+
+            // Minimap
+            mctx.fillStyle = 'rgba(10,10,25,0.95)';
+            mctx.fillRect(0, 0, 140, 140);
+            mctx.strokeStyle = '#4b5563';
+            mctx.lineWidth = 2;
+            mctx.strokeRect(0, 0, 140, 140);
+
+            const ratio = 140 / WORLD_SIZE;
+            Object.values(players).forEach(p => {
+                if (p.dead) return;
+                const px = p.x * ratio;
+                const py = p.y * ratio;
+
+                mctx.fillStyle = p.id === socketId ? '#ffffff' :
+                               p.team === 'red' ? '#f87171' :
+                               p.team === 'blue' ? '#60a5fa' : '#86efac';
+
+                mctx.beginPath();
+                mctx.arc(px, py, 4, 0, Math.PI * 2);
+                mctx.fill();
+
+                // Direction indicator
+                mctx.strokeStyle = '#000';
+                mctx.lineWidth = 2;
+                mctx.beginPath();
+                mctx.moveTo(px, py);
+                mctx.lineTo(px + Math.cos(p.turretAngle) * 8, py + Math.sin(p.turretAngle) * 8);
+                mctx.stroke();
+            });
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Helper
+        Math.clamp = (min, max, val) => Math.max(min, Math.min(max, val));
+    </script>
+</body>
+</html>
